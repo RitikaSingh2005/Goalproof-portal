@@ -1,0 +1,107 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  name         String
+  email        String        @unique
+  password     String
+  role         String        // 'employee', 'manager', 'admin'
+  manager_id   Int?
+  department   String?
+  created_at   DateTime      @default(now())
+
+  goals        Goal[]        @relation("UserGoals")
+  approvedGoals Goal[]       @relation("ApprovedGoals")
+  achievements Achievement[]
+  managerComments Comment[]  @relation("ManagerComments")
+  employeeComments Comment[] @relation("EmployeeComments")
+  auditLogs    AuditLog[]
+
+  // Self-relation for manager
+  manager      User?         @relation("ManagerToEmployee", fields: [manager_id], references: [id])
+  employees    User[]        @relation("ManagerToEmployee")
+}
+
+model Cycle {
+  id         Int      @id @default(autoincrement())
+  name       String
+  start_date DateTime
+  end_date   DateTime
+  status     String   @default("active") // 'active', 'completed', 'draft'
+  goals      Goal[]
+}
+
+model Goal {
+  id           Int           @id @default(autoincrement())
+  user_id      Int
+  thrust_area  String?       @default("Sales")
+  title        String
+  description  String?
+  uom_type     String?       @default("Numeric")
+  target_value Float?        @default(0)
+  status       String        @default("draft") // 'draft', 'pending', 'approved', 'rejected', 'locked'
+  weightage    Int           @default(0)
+  progress     Float         @default(0)
+  smart_score  Int?
+  cycle_id     Int?
+  created_at   DateTime      @default(now())
+  updated_at   DateTime      @updatedAt
+  approved_at  DateTime?
+  approved_by  Int?
+  is_shared    Boolean       @default(false)
+  shared_from  Int?
+
+  user         User          @relation("UserGoals", fields: [user_id], references: [id])
+  approver     User?         @relation("ApprovedGoals", fields: [approved_by], references: [id])
+  cycle        Cycle?        @relation(fields: [cycle_id], references: [id])
+  achievements Achievement[]
+}
+
+model Achievement {
+  id             Int      @id @default(autoincrement())
+  user_id        Int
+  goal_id        Int
+  quarter        String   @default("Q1")
+  year           Int      @default(2026)
+  actual_value   Float
+  status         String   @default("Not Started")
+  progress_score Float    @default(0)
+  description    String?
+  submitted_at   DateTime @default(now())
+  date           DateTime @default(now())
+
+  user           User     @relation(fields: [user_id], references: [id])
+  goal           Goal     @relation(fields: [goal_id], references: [id])
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  action    String
+  user_id   Int
+  details   String?
+  timestamp DateTime @default(now())
+
+  user      User     @relation(fields: [user_id], references: [id])
+}
+
+model Comment {
+  id          Int      @id @default(autoincrement())
+  manager_id  Int
+  employee_id Int
+  content     String
+  created_at  DateTime @default(now())
+
+  manager     User     @relation("ManagerComments", fields: [manager_id], references: [id])
+  employee    User     @relation("EmployeeComments", fields: [employee_id], references: [id])
+}
+
