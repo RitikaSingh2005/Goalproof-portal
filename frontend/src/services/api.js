@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'https://goalproof-portal.onrender.com';
+const API_URL = 'https://goalproof-backend-api.onrender.com';
 
 const api = axios.create({
   baseURL: API_URL,
