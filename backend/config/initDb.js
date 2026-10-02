@@ -1,19 +1,27 @@
 import { execSync } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import prisma from '../prisma/client.js';
 import bcrypt from 'bcryptjs';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const backendDir = path.resolve(__dirname, '..');
+const schemaPath = path.resolve(backendDir, 'prisma/schema.prisma');
 
 /**
  * Ensures SQLite tables exist and default seed data is present on cloud deployments.
  */
 export async function initializeDatabase() {
   try {
-    // Only attempt schema push in development/production if tables are missing or not in test mode
     if (process.env.NODE_ENV !== 'test') {
       try {
-        console.log('[DB Init] Syncing database schema...');
-        execSync('npx prisma db push --skip-generate', {
-          stdio: 'pipe',
-          timeout: 30000
+        console.log('[DB Init] Syncing database schema with Prisma...');
+        execSync(`npx prisma db push --schema="${schemaPath}" --skip-generate --accept-data-loss`, {
+          cwd: backendDir,
+          stdio: 'inherit',
+          timeout: 45000,
+          env: { ...process.env }
         });
         console.log('[DB Init] Database schema synced successfully.');
       } catch (err) {
@@ -70,7 +78,7 @@ export async function initializeDatabase() {
           }
         });
 
-        // Demo Goals for Employee (total weightage = 100)
+        // Demo Goals for Employee
         await prisma.goal.createMany({
           data: [
             {
