@@ -53,6 +53,26 @@ app.use('/api', apiLimiter);
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, {
   customSiteTitle: 'GoalProof API Docs'
 }));
+app.get('/docs', (req, res) => res.redirect('/api/docs'));
+
+// Root / API index endpoints
+app.get(['/', '/api'], (req, res) => {
+  res.json({
+    success: true,
+    message: 'GoalProof Performance Management API',
+    docs: '/api/docs',
+    health: '/api/health',
+    version: '1.0.0',
+    endpoints: {
+      auth: '/api/auth',
+      goals: '/api/goals',
+      manager: '/api/manager',
+      checkin: '/api/checkin',
+      admin: '/api/admin',
+      ai: '/api/ai'
+    }
+  });
+});
 
 // Mount Routes
 app.use('/api/auth', authRoutes);
@@ -69,6 +89,16 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     message: 'GoalProof API is running',
     environment: NODE_ENV
+  });
+});
+
+// Fallback for unhandled routes
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Endpoint ${req.method} ${req.originalUrl} not found`,
+    errorCode: 'ROUTE_NOT_FOUND',
+    docs: '/api/docs'
   });
 });
 
