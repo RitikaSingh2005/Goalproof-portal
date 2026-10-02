@@ -1,100 +1,137 @@
-import { PrismaClient } from '@prisma/client';
+import prisma from '../prisma/client.js';
+import { successResponse, errorResponse } from '../utils/responseHelper.js';
 
-const prisma = new PrismaClient();
-
-// Helper to determine active window
-const checkActiveWindow = () => {
-  const now = new Date();
-  const month = now.getMonth(); // 0-11
-  const date = now.getDate();
-
-  // For testing purposes, we'll open a mock window "Q-Test" so we can test the UI anytime.
-  // In production, we'd strictly enforce the dates below.
-  return { isActive: true, quarter: 'Q-Test', year: now.getFullYear() };
-
-  /* Strict logic:
-  if (month === 6) return { isActive: true, quarter: 'Q1', year: now.getFullYear() }; // July
-  if (month === 9) return { isActive: true, quarter: 'Q2', year: now.getFullYear() }; // Oct
-  if (month === 0) return { isActive: true, quarter: 'Q3', year: now.getFullYear() }; // Jan
-  if ((month === 2) || (month === 3 && date <= 15)) return { isActive: true, quarter: 'Q4', year: now.getFullYear() }; // Mar 1 - Apr 15
-  return { isActive: false, quarter: null, year: now.getFullYear() };
-  */
+// Helper to find currently active performance cycle within start_date and end_date
+export const findActiveCycle = async (date = new Date()) => {
+  const activeCycle = await prisma.cycle.findFirst({
+    where: {
+      status: 'active',
+      start_date: { lte: date },
+      end_date: { gte: date }
+    },
+    orderBy: { start_date: 'desc' }
+  });
+  return activeCycle;
 };
 
 // GET /api/checkin/active
-export const getActiveWindow = (req, res) => {
-  res.json(checkActiveWindow());
+export const getActiveWindow = async (req, res) => {
+  try {
+    const now = new Date();
+    const activeCycle = await findActiveCycle(now);
+
+    if (!activeCycle) {
+      const windowData = {
+        isActive: false,
+        quarter: null,
+        year: null
+      };
+      return successResponse(res, 200, 'Check-in window is currently closed', windowData, windowData);
+    }
+
+    const quarterName = activeCycle.name;
+    const year = new Date(activeCycle.start_date).getFullYear();
+
+    const windowData = {
+      isActive: true,
+      quarter: quarterName,
+      year: year,
+      cycle: activeCycle
+    };
+
+    return successResponse(res, 200, 'Active check-in window found', windowData, windowData);
+  } catch (error) {
+    console.error('Get active window error:', error);
+    return errorResponse(res, 500, 'Failed to fetch check-in window', 'ACTIVE_WINDOW_ERROR');
+  }
 };
 
 // POST /api/checkin
 export const submitCheckin = async (req, res) => {
   try {
     const { goal_id, actual_value, status, description } = req.body;
-    const window = checkActiveWindow();
+    const now = new Date();
+    const activeCycle = await findActiveCycle(now);
 
-    if (!window.isActive) {
-      return res.status(403).json({ error: 'Check-in window is currently closed.' });
+    if (!activeCycle) {
+      return errorResponse(res, 403, 'Check-in window is currently closed', 'CHECKIN_WINDOW_CLOSED');
+    }
+
+    const parsedGoalId = parseInt(goal_id, 10);
+    if (isNaN(parsedGoalId)) {
+      return errorResponse(res, 400, 'Goal ID must be a valid number', 'INVALID_ID');
+    }
+
+    if (actual_value === undefined || actual_value === null || isNaN(parseFloat(actual_value))) {
+      return errorResponse(res, 400, 'Actual value must be a valid number', 'INVALID_ACTUAL_VALUE');
     }
 
     const goal = await prisma.goal.findFirst({
-      where: { id: parseInt(goal_id, 10), user_id: req.user.id }
+      where: { id: parsedGoalId, user_id: req.user.id }
     });
 
-    if (!goal || goal.status !== 'approved') {
-      return res.status(400).json({ error: 'Invalid goal or goal is not approved.' });
+    if (!goal) {
+      return errorResponse(res, 400, 'Invalid goal or goal does not belong to user.', 'INVALID_GOAL');
     }
 
-    if (actual_value === undefined || actual_value === null) {
-      return res.status(400).json({ error: 'Actual value is required.' });
+    if (goal.status !== 'approved') {
+      return errorResponse(res, 400, 'Invalid goal or goal is not approved.', 'GOAL_NOT_APPROVED');
     }
 
     // Progress Calculation Engine
     let progress_score = 0;
     const actual = parseFloat(actual_value);
-    const target = goal.target_value;
+    const target = goal.target_value || 0;
 
     if (goal.uom_type === 'Numeric' || goal.uom_type === 'Percentage') {
       progress_score = target > 0 ? (actual / target) * 100 : 0;
     } else if (goal.uom_type === 'Timeline') {
-      // Simplistic timeline interpretation (if status is completed => 100%)
       progress_score = status === 'Completed' ? 100 : (actual > 0 ? actual : 0);
+    } else {
+      progress_score = target > 0 ? (actual / target) * 100 : 0;
     }
-    
+
     // Cap at 150% for display
     if (progress_score > 150) progress_score = 150;
+    if (progress_score < 0) progress_score = 0;
+    progress_score = Math.round(progress_score * 100) / 100;
+
+    const cycleYear = new Date(activeCycle.start_date).getFullYear();
 
     const achievement = await prisma.achievement.create({
       data: {
         user_id: req.user.id,
         goal_id: goal.id,
-        quarter: window.quarter,
-        year: window.year,
+        quarter: activeCycle.name,
+        year: cycleYear,
         actual_value: actual,
-        status,
+        status: status || 'In Progress',
         progress_score,
-        description: description || ''
+        description: description ? description.trim() : ''
       }
     });
 
-    // Update goal progress overall (simple average or replacement depending on business logic)
-    // Here we'll just replace it with the latest progress score
+    // Update goal's current progress and associate cycle
     await prisma.goal.update({
       where: { id: goal.id },
-      data: { progress: progress_score }
+      data: {
+        progress: progress_score,
+        cycle_id: activeCycle.id
+      }
     });
 
     await prisma.auditLog.create({
       data: {
         action: 'submit_checkin',
         user_id: req.user.id,
-        details: `Submitted checkin for goal ${goal.id} in ${window.quarter}`
+        details: `Submitted checkin for goal ${goal.id} in ${activeCycle.name}`
       }
     });
 
-    res.json({ achievement, message: 'Check-in submitted successfully.' });
+    return successResponse(res, 201, 'Check-in submitted successfully.', { achievement }, { achievement });
   } catch (error) {
     console.error('Submit checkin error:', error);
-    res.status(500).json({ error: 'Failed to submit check-in' });
+    return errorResponse(res, 500, 'Failed to submit check-in', 'SUBMIT_CHECKIN_ERROR');
   }
 };
 
@@ -104,14 +141,14 @@ export const getCheckinHistory = async (req, res) => {
     const history = await prisma.achievement.findMany({
       where: { user_id: req.user.id },
       include: {
-        goal: { select: { title: true, target_value: true, uom_type: true } }
+        goal: { select: { id: true, title: true, target_value: true, uom_type: true } }
       },
       orderBy: { submitted_at: 'desc' }
     });
 
-    res.json({ history });
+    return successResponse(res, 200, 'Check-in history fetched successfully', { history }, { history });
   } catch (error) {
     console.error('Get checkin history error:', error);
-    res.status(500).json({ error: 'Failed to fetch check-in history' });
+    return errorResponse(res, 500, 'Failed to fetch check-in history', 'FETCH_HISTORY_ERROR');
   }
 };

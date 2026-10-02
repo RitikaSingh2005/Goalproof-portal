@@ -1,6 +1,5 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import prisma from '../prisma/client.js';
+import { successResponse, errorResponse } from '../utils/responseHelper.js';
 
 // Helper to check for goal decay (no updates for > 14 days)
 const isDecayed = (updatedAt) => {
@@ -34,10 +33,10 @@ export const getPendingGoals = async (req, res) => {
       isMismatch: isMismatch(goal.progress, goal.target_value)
     }));
 
-    res.json({ goals: enrichedGoals });
+    return successResponse(res, 200, 'Pending goals fetched successfully', { goals: enrichedGoals }, { goals: enrichedGoals });
   } catch (error) {
     console.error('Get pending goals error:', error);
-    res.status(500).json({ error: 'Failed to fetch pending goals' });
+    return errorResponse(res, 500, 'Failed to fetch pending goals', 'FETCH_PENDING_GOALS_ERROR');
   }
 };
 
@@ -45,15 +44,24 @@ export const getPendingGoals = async (req, res) => {
 export const approveGoal = async (req, res) => {
   try {
     const { id } = req.params;
+    const goalId = parseInt(id, 10);
+    if (isNaN(goalId)) {
+      return errorResponse(res, 400, 'Invalid goal ID', 'INVALID_ID');
+    }
 
     const goal = await prisma.goal.findFirst({
-      where: { id: parseInt(id, 10), user: { manager_id: req.user.id } }
+      where: {
+        id: goalId,
+        user: { manager_id: req.user.id }
+      }
     });
 
-    if (!goal) return res.status(404).json({ error: 'Goal not found or unauthorized' });
+    if (!goal) {
+      return errorResponse(res, 404, 'Goal not found or unauthorized', 'GOAL_NOT_FOUND');
+    }
 
     const updatedGoal = await prisma.goal.update({
-      where: { id: parseInt(id, 10) },
+      where: { id: goalId },
       data: {
         status: 'approved',
         approved_by: req.user.id,
@@ -69,10 +77,10 @@ export const approveGoal = async (req, res) => {
       }
     });
 
-    res.json({ goal: updatedGoal, message: 'Goal approved' });
+    return successResponse(res, 200, 'Goal approved', { goal: updatedGoal }, { goal: updatedGoal });
   } catch (error) {
     console.error('Approve goal error:', error);
-    res.status(500).json({ error: 'Failed to approve goal' });
+    return errorResponse(res, 500, 'Failed to approve goal', 'APPROVE_GOAL_ERROR');
   }
 };
 
@@ -80,15 +88,24 @@ export const approveGoal = async (req, res) => {
 export const rejectGoal = async (req, res) => {
   try {
     const { id } = req.params;
+    const goalId = parseInt(id, 10);
+    if (isNaN(goalId)) {
+      return errorResponse(res, 400, 'Invalid goal ID', 'INVALID_ID');
+    }
 
     const goal = await prisma.goal.findFirst({
-      where: { id: parseInt(id, 10), user: { manager_id: req.user.id } }
+      where: {
+        id: goalId,
+        user: { manager_id: req.user.id }
+      }
     });
 
-    if (!goal) return res.status(404).json({ error: 'Goal not found or unauthorized' });
+    if (!goal) {
+      return errorResponse(res, 404, 'Goal not found or unauthorized', 'GOAL_NOT_FOUND');
+    }
 
     const updatedGoal = await prisma.goal.update({
-      where: { id: parseInt(id, 10) },
+      where: { id: goalId },
       data: { status: 'rejected' }
     });
 
@@ -100,10 +117,10 @@ export const rejectGoal = async (req, res) => {
       }
     });
 
-    res.json({ goal: updatedGoal, message: 'Goal rejected' });
+    return successResponse(res, 200, 'Goal rejected', { goal: updatedGoal }, { goal: updatedGoal });
   } catch (error) {
     console.error('Reject goal error:', error);
-    res.status(500).json({ error: 'Failed to reject goal' });
+    return errorResponse(res, 500, 'Failed to reject goal', 'REJECT_GOAL_ERROR');
   }
 };
 
@@ -111,22 +128,32 @@ export const rejectGoal = async (req, res) => {
 export const editGoal = async (req, res) => {
   try {
     const { id } = req.params;
+    const goalId = parseInt(id, 10);
+    if (isNaN(goalId)) {
+      return errorResponse(res, 400, 'Invalid goal ID', 'INVALID_ID');
+    }
+
     const { title, description, target_value, weightage, thrust_area } = req.body;
 
     const goal = await prisma.goal.findFirst({
-      where: { id: parseInt(id, 10), user: { manager_id: req.user.id } }
+      where: {
+        id: goalId,
+        user: { manager_id: req.user.id }
+      }
     });
 
-    if (!goal) return res.status(404).json({ error: 'Goal not found or unauthorized' });
+    if (!goal) {
+      return errorResponse(res, 404, 'Goal not found or unauthorized', 'GOAL_NOT_FOUND');
+    }
 
     const updatedGoal = await prisma.goal.update({
-      where: { id: parseInt(id, 10) },
+      where: { id: goalId },
       data: {
-        title,
-        description,
-        target_value: target_value ? parseFloat(target_value) : undefined,
-        weightage: weightage ? parseInt(weightage, 10) : undefined,
-        thrust_area
+        title: title !== undefined ? title : goal.title,
+        description: description !== undefined ? description : goal.description,
+        target_value: target_value !== undefined ? parseFloat(target_value) : goal.target_value,
+        weightage: weightage !== undefined ? parseInt(weightage, 10) : goal.weightage,
+        thrust_area: thrust_area !== undefined ? thrust_area : goal.thrust_area
       }
     });
 
@@ -138,10 +165,10 @@ export const editGoal = async (req, res) => {
       }
     });
 
-    res.json({ goal: updatedGoal, message: 'Goal updated' });
+    return successResponse(res, 200, 'Goal updated', { goal: updatedGoal }, { goal: updatedGoal });
   } catch (error) {
     console.error('Edit goal error:', error);
-    res.status(500).json({ error: 'Failed to edit goal' });
+    return errorResponse(res, 500, 'Failed to edit goal', 'EDIT_GOAL_ERROR');
   }
 };
 
@@ -178,35 +205,35 @@ export const getTeamAnalytics = async (req, res) => {
       };
     });
 
-    res.json({ team: teamStats });
+    return successResponse(res, 200, 'Team analytics fetched successfully', { team: teamStats }, { team: teamStats });
   } catch (error) {
     console.error('Get team error:', error);
-    res.status(500).json({ error: 'Failed to fetch team analytics' });
+    return errorResponse(res, 500, 'Failed to fetch team analytics', 'FETCH_TEAM_ERROR');
   }
 };
 
 // GET /api/manager/attention-score
 export const getAttentionScore = async (req, res) => {
   try {
-    // Basic heuristic for score calculation
-    // Speed of approval (simulated as high if not many pending for long)
     const pendingGoals = await prisma.goal.count({
       where: { status: 'pending', user: { manager_id: req.user.id } }
     });
     
-    let score = 95 - (pendingGoals * 5); // Example calculation
+    let score = 95 - (pendingGoals * 5);
     if (score < 0) score = 0;
     
-    res.json({ 
+    const data = { 
       score,
       details: {
         approvalSpeed: 'Excellent',
         pendingActionItems: pendingGoals
       }
-    });
+    };
+
+    return successResponse(res, 200, 'Attention score fetched successfully', data, data);
   } catch (error) {
     console.error('Attention score error:', error);
-    res.status(500).json({ error: 'Failed to calculate attention score' });
+    return errorResponse(res, 500, 'Failed to calculate attention score', 'ATTENTION_SCORE_ERROR');
   }
 };
 
@@ -214,13 +241,21 @@ export const getAttentionScore = async (req, res) => {
 export const addComment = async (req, res) => {
   try {
     const { employeeId } = req.params;
+    const empId = parseInt(employeeId, 10);
+    if (isNaN(empId)) {
+      return errorResponse(res, 400, 'Invalid employee ID', 'INVALID_ID');
+    }
+
     const { content } = req.body;
+    if (!content || !content.trim()) {
+      return errorResponse(res, 400, 'Comment content is required', 'MISSING_CONTENT');
+    }
 
     const comment = await prisma.comment.create({
       data: {
         manager_id: req.user.id,
-        employee_id: parseInt(employeeId, 10),
-        content
+        employee_id: empId,
+        content: content.trim()
       }
     });
 
@@ -228,13 +263,13 @@ export const addComment = async (req, res) => {
       data: {
         action: 'add_comment',
         user_id: req.user.id,
-        details: `Added comment for employee ID: ${employeeId}`
+        details: `Added comment for employee ID: ${empId}`
       }
     });
 
-    res.json({ comment, message: 'Comment added successfully' });
+    return successResponse(res, 201, 'Comment added successfully', { comment }, { comment });
   } catch (error) {
     console.error('Add comment error:', error);
-    res.status(500).json({ error: 'Failed to add comment' });
+    return errorResponse(res, 500, 'Failed to add comment', 'ADD_COMMENT_ERROR');
   }
 };

@@ -1,42 +1,33 @@
 import OpenAI from 'openai';
-import dotenv from 'dotenv';
+import { OPENAI_API_KEY } from '../config/env.js';
+import { successResponse, errorResponse } from '../utils/responseHelper.js';
 
-dotenv.config();
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'mock-key',
-});
+// Lazily or conditionally initialize OpenAI client based on active environment key
+const getOpenAIClient = () => {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key || !key.trim()) return null;
+  return new OpenAI({ apiKey: key.trim() });
+};
 
 export const getSmartScore = async (req, res) => {
   try {
     const { title } = req.body;
     
-    if (!title || title.trim() === '') {
-      return res.status(400).json({ error: 'Goal title is required' });
+    if (!title || typeof title !== 'string' || title.trim() === '') {
+      return errorResponse(res, 400, 'Goal title is required', 'MISSING_TITLE');
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      // Mock fallback if no API key is provided
-      console.log('No OPENAI_API_KEY found, using mock AI response.');
-      // Generate a mock score based on length of title to make it somewhat dynamic
-      const lengthScore = Math.min(title.length * 2, 100);
-      const isSpecific = title.length > 20;
-      
-      const score = isSpecific ? Math.floor(Math.random() * 20) + 70 : Math.floor(Math.random() * 40) + 30;
-      
-      return res.json({
-        score,
-        feedback: isSpecific ? "This goal is well defined and specific." : "This goal is too vague. Try adding more specific details.",
-        suggestions: [
-          "Include a clear timeline.",
-          "Add measurable metrics.",
-          "Ensure it aligns with company objectives."
-        ]
-      });
+    const client = getOpenAIClient();
+    if (!client) {
+      return errorResponse(
+        res,
+        503,
+        'OpenAI service is not configured. OPENAI_API_KEY is missing.',
+        'AI_NOT_CONFIGURED'
+      );
     }
 
-    // Call OpenAI API
-    const response = await openai.chat.completions.create({
+    const response = await client.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
         {
@@ -45,19 +36,22 @@ export const getSmartScore = async (req, res) => {
         },
         {
           role: "user",
-          content: title
+          content: title.trim()
         }
       ],
       temperature: 0.3,
     });
 
-    const aiContent = response.choices[0].message.content;
-    const parsedData = JSON.parse(aiContent);
+    const aiContent = response.choices?.[0]?.message?.content;
+    if (!aiContent) {
+      return errorResponse(res, 502, 'Received empty response from AI service', 'AI_EMPTY_RESPONSE');
+    }
 
-    res.json(parsedData);
+    const parsedData = JSON.parse(aiContent);
+    return successResponse(res, 200, 'SMART score generated successfully', parsedData, parsedData);
   } catch (error) {
-    console.error('AI Smart Score error:', error);
-    res.status(500).json({ error: 'Failed to generate SMART score' });
+    console.error('AI Smart Score error:', error.message || error);
+    return errorResponse(res, 502, 'Failed to generate SMART score from AI service', 'AI_SERVICE_ERROR');
   }
 };
 
@@ -65,22 +59,21 @@ export const verifyAchievement = async (req, res) => {
   try {
     const { achievement, goalTitle, target } = req.body;
     
-    if (achievement === undefined || !goalTitle || target === undefined) {
-      return res.status(400).json({ error: 'Missing required fields for verification' });
+    if (achievement === undefined || achievement === null || !goalTitle || target === undefined || target === null) {
+      return errorResponse(res, 400, 'Missing required fields for verification (achievement, goalTitle, target)', 'MISSING_FIELDS');
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      // Mock logic
-      const val = parseFloat(achievement);
-      const tgt = parseFloat(target);
-      const isRealistic = (val <= tgt * 1.3);
-      return res.json({
-        isRealistic,
-        warning: isRealistic ? null : "This achievement seems unusually high compared to the target. Please verify accuracy."
-      });
+    const client = getOpenAIClient();
+    if (!client) {
+      return errorResponse(
+        res,
+        503,
+        'OpenAI service is not configured. OPENAI_API_KEY is missing.',
+        'AI_NOT_CONFIGURED'
+      );
     }
 
-    const response = await openai.chat.completions.create({
+    const response = await client.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
         {
@@ -95,12 +88,15 @@ export const verifyAchievement = async (req, res) => {
       temperature: 0.2,
     });
 
-    const aiContent = response.choices[0].message.content;
-    const parsedData = JSON.parse(aiContent);
+    const aiContent = response.choices?.[0]?.message?.content;
+    if (!aiContent) {
+      return errorResponse(res, 502, 'Received empty response from AI service', 'AI_EMPTY_RESPONSE');
+    }
 
-    res.json(parsedData);
+    const parsedData = JSON.parse(aiContent);
+    return successResponse(res, 200, 'Achievement verified successfully', parsedData, parsedData);
   } catch (error) {
-    console.error('AI Verification error:', error);
-    res.status(500).json({ error: 'Failed to verify achievement' });
+    console.error('AI Verification error:', error.message || error);
+    return errorResponse(res, 502, 'Failed to verify achievement via AI service', 'AI_SERVICE_ERROR');
   }
 };

@@ -500,7 +500,7 @@ const AdminDashboard = () => {
                 <tbody className="divide-y divide-white/5">
                   {auditLogs.map((log, i) => {
                     let detailsObj = null;
-                    try { detailsObj = JSON.parse(log.details); } catch (e) { }
+                    try { detailsObj = JSON.parse(log.details); } catch (e) { detailsObj = null; }
                     return (
                     <motion.tr initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.02 }} key={log.id} className="hover:bg-white/5 transition-colors">
                       <td className="px-6 py-4 whitespace-nowrap text-gray-400">{new Date(log.timestamp).toLocaleString()}</td>

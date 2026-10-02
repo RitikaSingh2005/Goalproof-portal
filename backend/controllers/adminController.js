@@ -1,6 +1,5 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import prisma from '../prisma/client.js';
+import { successResponse, errorResponse } from '../utils/responseHelper.js';
 
 // CYCLE MANAGEMENT
 export const createCycle = async (req, res) => {
@@ -13,8 +12,6 @@ export const createCycle = async (req, res) => {
     });
 
     if (activeCycle) {
-      // Deactivate old active cycle automatically or reject? Let's just create it but warn, or deactivate the old one.
-      // Requirements state: "Ensure only one active cycle per quarter/overlapping prevented"
       await prisma.cycle.update({
         where: { id: activeCycle.id },
         data: { status: 'completed' }
@@ -38,22 +35,27 @@ export const createCycle = async (req, res) => {
       }
     });
 
-    res.json({ message: 'Cycle created successfully', cycle });
+    return successResponse(res, 201, 'Cycle created successfully', { cycle }, { cycle });
   } catch (error) {
     console.error('Create cycle error:', error);
-    res.status(500).json({ error: 'Failed to create cycle' });
+    return errorResponse(res, 500, 'Failed to create cycle', 'CREATE_CYCLE_ERROR');
   }
 };
 
 export const updateCycle = async (req, res) => {
   try {
     const { id } = req.params;
+    const cycleId = parseInt(id, 10);
+    if (isNaN(cycleId)) {
+      return errorResponse(res, 400, 'Invalid cycle ID', 'INVALID_ID');
+    }
+
     const { name, start_date, end_date, status } = req.body;
     
     // Check overlaps if activating
     if (status === 'active') {
       const activeCycle = await prisma.cycle.findFirst({
-        where: { status: 'active', id: { not: parseInt(id) } }
+        where: { status: 'active', id: { not: cycleId } }
       });
       if (activeCycle) {
         await prisma.cycle.update({
@@ -63,15 +65,18 @@ export const updateCycle = async (req, res) => {
       }
     }
 
-    const oldCycle = await prisma.cycle.findUnique({ where: { id: parseInt(id) } });
+    const oldCycle = await prisma.cycle.findUnique({ where: { id: cycleId } });
+    if (!oldCycle) {
+      return errorResponse(res, 404, 'Cycle not found', 'CYCLE_NOT_FOUND');
+    }
 
     const updatedCycle = await prisma.cycle.update({
-      where: { id: parseInt(id) },
+      where: { id: cycleId },
       data: {
-        name,
-        start_date: new Date(start_date),
-        end_date: new Date(end_date),
-        status
+        name: name !== undefined ? name : oldCycle.name,
+        start_date: start_date ? new Date(start_date) : oldCycle.start_date,
+        end_date: end_date ? new Date(end_date) : oldCycle.end_date,
+        status: status !== undefined ? status : oldCycle.status
       }
     });
 
@@ -82,31 +87,31 @@ export const updateCycle = async (req, res) => {
         details: JSON.stringify({
           old: { name: oldCycle.name, status: oldCycle.status },
           new: { name: updatedCycle.name, status: updatedCycle.status },
-          message: `Updated cycle: ${name}`
+          message: `Updated cycle: ${updatedCycle.name}`
         })
       }
     });
 
-    res.json({ message: 'Cycle updated successfully', cycle: updatedCycle });
+    return successResponse(res, 200, 'Cycle updated successfully', { cycle: updatedCycle }, { cycle: updatedCycle });
   } catch (error) {
     console.error('Update cycle error:', error);
-    res.status(500).json({ error: 'Failed to update cycle' });
+    return errorResponse(res, 500, 'Failed to update cycle', 'UPDATE_CYCLE_ERROR');
   }
 };
 
 export const getCycles = async (req, res) => {
   try {
     const cycles = await prisma.cycle.findMany({ orderBy: { start_date: 'desc' } });
-    res.json({ cycles });
+    return successResponse(res, 200, 'Cycles fetched successfully', { cycles }, { cycles });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch cycles' });
+    console.error('Get cycles error:', error);
+    return errorResponse(res, 500, 'Failed to fetch cycles', 'FETCH_CYCLES_ERROR');
   }
 };
 
 // ORGANIZATION INTELLIGENCE
 export const getInsights = async (req, res) => {
   try {
-    // 1. Avg SMART score by dept
     const goals = await prisma.goal.findMany({
       include: { user: true }
     });
@@ -117,7 +122,7 @@ export const getInsights = async (req, res) => {
     let completedGoals = 0;
     
     goals.forEach(g => {
-      const dept = g.user.department || 'Unknown';
+      const dept = g.user?.department || 'Unknown';
       if (g.smart_score) {
         if (!smartScores[dept]) smartScores[dept] = { sum: 0, count: 0 };
         smartScores[dept].sum += g.smart_score;
@@ -142,19 +147,16 @@ export const getInsights = async (req, res) => {
       completionRate: Math.round(teamCompletion[dept].progressSum / teamCompletion[dept].count)
     }));
 
-    // 2. Goal Abandonment
     const totalGoals = goals.length;
     const abandonedGoals = goals.filter(g => g.status === 'rejected' || g.status === 'locked').length;
     const abandonmentRate = totalGoals > 0 ? Math.round((abandonedGoals / totalGoals) * 100) : 0;
     
-    // 3. Manager Rankings (Real calculation based on completion By Dept / team avg)
     const managers = await prisma.user.findMany({ where: { role: 'manager' } });
     const managerRankings = managers.map(m => {
-      // Find their department's completion rate
       const deptStats = completionByDept.find(d => d.department === m.department);
-      let effectiveness = 70; // baseline
+      let effectiveness = 70;
       if (deptStats && deptStats.completionRate) {
-        effectiveness = Math.min(100, Math.max(0, deptStats.completionRate + 15)); // pseudo-calculation using real team progress
+        effectiveness = Math.min(100, Math.max(0, deptStats.completionRate + 15));
       }
       return {
         name: m.name,
@@ -162,7 +164,6 @@ export const getInsights = async (req, res) => {
       };
     }).sort((a, b) => b.effectiveness - a.effectiveness);
 
-    // 4. Missing metrics for Completion Tracking & Quality Issues
     const pendingManagerReviews = goals.filter(g => g.status === 'pending').length;
     
     const users = await prisma.user.findMany({
@@ -175,11 +176,11 @@ export const getInsights = async (req, res) => {
     });
     
     const commonIssues = [
-      { issue: "Vague Description", count: goals.filter(g => g.smart_score < 70).length },
+      { issue: "Vague Description", count: goals.filter(g => g.smart_score && g.smart_score < 70).length },
       { issue: "Unrealistic Target", count: goals.filter(g => g.target_value > 1000).length }
     ].filter(i => i.count > 0);
 
-    res.json({
+    const insightsData = {
       smartScoreByDept,
       completionByDept,
       abandonmentRate,
@@ -190,10 +191,12 @@ export const getInsights = async (req, res) => {
       employeesCompletedCheckins,
       totalEmployees: users.length,
       commonIssues
-    });
+    };
+
+    return successResponse(res, 200, 'Insights fetched successfully', insightsData, insightsData);
   } catch (error) {
     console.error('Get insights error:', error);
-    res.status(500).json({ error: 'Failed to fetch insights' });
+    return errorResponse(res, 500, 'Failed to fetch insights', 'FETCH_INSIGHTS_ERROR');
   }
 };
 
@@ -208,15 +211,13 @@ export const getSharedAnalytics = async (req, res) => {
     const masterGoals = sharedGoals.filter(g => g.shared_from === null);
     const assignedGoals = sharedGoals.filter(g => g.shared_from !== null);
 
-    // 1. Completion Rate
     let totalProgress = 0;
     assignedGoals.forEach(g => totalProgress += g.progress);
     const overallCompletionRate = assignedGoals.length > 0 ? Math.round(totalProgress / assignedGoals.length) : 0;
 
-    // 2. Department-wise Performance
     const deptStats = {};
     assignedGoals.forEach(g => {
-      const dept = g.user.department || 'Unknown';
+      const dept = g.user?.department || 'Unknown';
       if (!deptStats[dept]) deptStats[dept] = { sum: 0, count: 0 };
       deptStats[dept].sum += g.progress;
       deptStats[dept].count += 1;
@@ -226,25 +227,25 @@ export const getSharedAnalytics = async (req, res) => {
       performance: Math.round(deptStats[dept].sum / deptStats[dept].count)
     }));
 
-    // 3. Employee Participation Rate (Goals where employee has updated weightage > 0)
     const participatingGoals = assignedGoals.filter(g => g.weightage > 0);
     const participationRate = assignedGoals.length > 0 ? Math.round((participatingGoals.length / assignedGoals.length) * 100) : 0;
 
-    // 4. Abandonment Rate (Goals that are rejected or stuck in pending for a long time)
     const abandonedGoals = assignedGoals.filter(g => g.status === 'rejected').length;
     const abandonmentRate = assignedGoals.length > 0 ? Math.round((abandonedGoals / assignedGoals.length) * 100) : 0;
 
-    res.json({
+    const analyticsData = {
       totalMasterGoals: masterGoals.length,
       totalAssignedGoals: assignedGoals.length,
       overallCompletionRate,
       departmentPerformance,
       participationRate,
       abandonmentRate
-    });
+    };
+
+    return successResponse(res, 200, 'Shared analytics fetched successfully', analyticsData, analyticsData);
   } catch (error) {
     console.error('Get shared analytics error:', error);
-    res.status(500).json({ error: 'Failed to fetch shared analytics' });
+    return errorResponse(res, 500, 'Failed to fetch shared analytics', 'FETCH_SHARED_ANALYTICS_ERROR');
   }
 };
 
@@ -256,9 +257,10 @@ export const getAuditLogs = async (req, res) => {
       orderBy: { timestamp: 'desc' },
       take: 100
     });
-    res.json({ logs });
+    return successResponse(res, 200, 'Audit logs fetched successfully', { logs }, { logs });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch audit logs' });
+    console.error('Get audit logs error:', error);
+    return errorResponse(res, 500, 'Failed to fetch audit logs', 'FETCH_AUDIT_LOGS_ERROR');
   }
 };
 
@@ -269,16 +271,15 @@ export const downloadReport = async (req, res) => {
       include: { user: true }
     });
 
-    // Build CSV manually
     let csv = 'Employee,Department,Goal Title,Target,Progress,Status,Created At\n';
     goals.forEach(g => {
-      const emp = `"${g.user.name.replace(/"/g, '""')}"`;
-      const dept = `"${(g.user.department || '').replace(/"/g, '""')}"`;
-      const title = `"${g.title.replace(/"/g, '""')}"`;
-      const target = g.target_value;
-      const progress = g.progress;
-      const status = g.status;
-      const date = g.created_at.toISOString().split('T')[0];
+      const emp = `"${(g.user?.name || '').replace(/"/g, '""')}"`;
+      const dept = `"${(g.user?.department || '').replace(/"/g, '""')}"`;
+      const title = `"${(g.title || '').replace(/"/g, '""')}"`;
+      const target = g.target_value ?? 0;
+      const progress = g.progress ?? 0;
+      const status = g.status || '';
+      const date = g.created_at ? g.created_at.toISOString().split('T')[0] : '';
       
       csv += `${emp},${dept},${title},${target},${progress},${status},${date}\n`;
     });
@@ -293,10 +294,10 @@ export const downloadReport = async (req, res) => {
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="goalproof_report.csv"');
-    res.send(csv);
+    return res.status(200).send(csv);
   } catch (error) {
     console.error('Export error:', error);
-    res.status(500).json({ error: 'Failed to generate report' });
+    return errorResponse(res, 500, 'Failed to generate report', 'REPORT_GENERATION_ERROR');
   }
 };
 
@@ -304,15 +305,25 @@ export const downloadReport = async (req, res) => {
 export const unlockGoal = async (req, res) => {
   try {
     const { id } = req.params;
+    const goalId = parseInt(id, 10);
+    if (isNaN(goalId)) {
+      return errorResponse(res, 400, 'Invalid goal ID', 'INVALID_ID');
+    }
+
     const { justification } = req.body;
 
-    if (!justification) {
-      return res.status(400).json({ error: 'Justification is required to unlock a goal.' });
+    if (!justification || !justification.trim()) {
+      return errorResponse(res, 400, 'Justification is required to unlock a goal.', 'MISSING_JUSTIFICATION');
+    }
+
+    const existing = await prisma.goal.findUnique({ where: { id: goalId } });
+    if (!existing) {
+      return errorResponse(res, 404, 'Goal not found', 'GOAL_NOT_FOUND');
     }
 
     const goal = await prisma.goal.update({
-      where: { id: parseInt(id) },
-      data: { status: 'approved' } // unlock and approve
+      where: { id: goalId },
+      data: { status: 'draft' } // Set to draft so employee can edit and re-submit
     });
 
     await prisma.auditLog.create({
@@ -320,17 +331,17 @@ export const unlockGoal = async (req, res) => {
         action: 'unlock_override',
         user_id: req.user.id,
         details: JSON.stringify({
-          old: { status: "locked/rejected" },
-          new: { status: "approved" },
-          message: `Unlocked goal ID ${id}. Justification: ${justification}`
+          oldStatus: existing.status,
+          newStatus: 'draft',
+          message: `Unlocked goal ID ${goalId}. Justification: ${justification.trim()}`
         })
       }
     });
 
-    res.json({ message: 'Goal unlocked successfully', goal });
+    return successResponse(res, 200, 'Goal unlocked successfully', { goal }, { goal });
   } catch (error) {
     console.error('Unlock error:', error);
-    res.status(500).json({ error: 'Failed to unlock goal' });
+    return errorResponse(res, 500, 'Failed to unlock goal', 'UNLOCK_GOAL_ERROR');
   }
 };
 
@@ -341,9 +352,10 @@ export const getEmployees = async (req, res) => {
       where: { role: 'employee' },
       select: { id: true, name: true, email: true, department: true }
     });
-    res.json({ employees });
+    return successResponse(res, 200, 'Employees fetched successfully', { employees }, { employees });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch employees' });
+    console.error('Get employees error:', error);
+    return errorResponse(res, 500, 'Failed to fetch employees', 'FETCH_EMPLOYEES_ERROR');
   }
 };
 
@@ -351,40 +363,35 @@ export const createSharedGoal = async (req, res) => {
   try {
     const { title, description, target_value, uom_type, thrust_area, employeeIds } = req.body;
     
-    if (!employeeIds || employeeIds.length === 0) {
-      return res.status(400).json({ error: 'Must select at least one employee.' });
+    if (!employeeIds || !Array.isArray(employeeIds) || employeeIds.length === 0) {
+      return errorResponse(res, 400, 'Must select at least one employee.', 'NO_EMPLOYEES_SELECTED');
     }
 
-    // Create the master goal assigned to the admin
     const masterGoal = await prisma.goal.create({
       data: {
         user_id: req.user.id,
         title,
-        description,
-        target_value: parseFloat(target_value),
-        uom_type,
-        thrust_area,
+        description: description || null,
+        target_value: parseFloat(target_value) || 0,
+        uom_type: uom_type || 'Numeric',
+        thrust_area: thrust_area || 'Operations',
         status: 'approved',
         is_shared: true
       }
     });
 
-    // Create duplicates for all selected employees
-    const childGoals = [];
-    for (const empId of employeeIds) {
-      childGoals.push({
-        user_id: parseInt(empId),
-        title,
-        description,
-        target_value: parseFloat(target_value),
-        uom_type,
-        thrust_area,
-        status: 'pending', // Employee must still accept/set weightage
-        is_shared: true,
-        shared_from: masterGoal.id,
-        weightage: 0 // Employee has to balance their own weightage
-      });
-    }
+    const childGoals = employeeIds.map(empId => ({
+      user_id: parseInt(empId, 10),
+      title,
+      description: description || null,
+      target_value: parseFloat(target_value) || 0,
+      uom_type: uom_type || 'Numeric',
+      thrust_area: thrust_area || 'Operations',
+      status: 'pending',
+      is_shared: true,
+      shared_from: masterGoal.id,
+      weightage: 0
+    }));
 
     await prisma.goal.createMany({ data: childGoals });
 
@@ -396,9 +403,9 @@ export const createSharedGoal = async (req, res) => {
       }
     });
 
-    res.json({ message: 'Shared goal successfully bulk-assigned', masterGoal });
+    return successResponse(res, 201, 'Shared goal successfully bulk-assigned', { masterGoal }, { masterGoal });
   } catch (error) {
     console.error('Create shared goal error:', error);
-    res.status(500).json({ error: 'Failed to create shared goals' });
+    return errorResponse(res, 500, 'Failed to create shared goals', 'CREATE_SHARED_GOAL_ERROR');
   }
 };

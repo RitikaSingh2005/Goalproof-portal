@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { getGoals, createGoal, deleteGoal, submitAllGoals, getSmartScore, getActiveWindow, submitCheckin, getCheckinHistory, verifyAchievement } from '../../services/api';
+import { getGoals, createGoal, updateGoal, deleteGoal, submitAllGoals, getSmartScore, getActiveWindow, submitCheckin, getCheckinHistory, verifyAchievement } from '../../services/api';
 import api from '../../services/api';
 import CircularMeter from '../../components/CircularMeter';
 import ProfileModal from '../../components/ProfileModal';
@@ -153,7 +153,7 @@ const EmployeeDashboard = () => {
     e.preventDefault();
     setFormError('');
     try {
-      await api.editGoal(editingGoal.id, editForm);
+      await updateGoal(editingGoal.id, editForm);
       toast.success('Goal updated successfully');
       setEditingGoal(null);
       fetchData();

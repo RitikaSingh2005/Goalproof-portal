@@ -76,10 +76,6 @@ const EditGoalModal = ({ goal, onClose, onSave }) => {
           </div>
         </form>
       </motion.div>
-      <ProfileModal 
-        isOpen={isProfileOpen} 
-        onClose={() => setIsProfileOpen(false)} 
-      />
     </motion.div>
   );
 };
@@ -437,6 +433,11 @@ const ManagerDashboard = () => {
           />
         )}
       </AnimatePresence>
+
+      <ProfileModal 
+        isOpen={isProfileOpen} 
+        onClose={() => setIsProfileOpen(false)} 
+      />
     </div>
   );
 };

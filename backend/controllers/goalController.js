@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
-import { validationResult } from 'express-validator';
-
-const prisma = new PrismaClient();
+import prisma from '../prisma/client.js';
+import { successResponse, errorResponse } from '../utils/responseHelper.js';
 
 // GET /api/goals
 export const getGoals = async (req, res) => {
@@ -10,34 +8,30 @@ export const getGoals = async (req, res) => {
       where: { user_id: req.user.id },
       orderBy: { created_at: 'desc' }
     });
-    res.json({ goals });
+    return successResponse(res, 200, 'Goals fetched successfully', { goals }, { goals });
   } catch (error) {
     console.error('Get goals error:', error);
-    res.status(500).json({ error: 'Failed to fetch goals' });
+    return errorResponse(res, 500, 'Failed to fetch goals', 'FETCH_GOALS_ERROR');
   }
 };
 
-// Get strictly shared goals for employee
+// GET /api/goals/shared
 export const getSharedGoals = async (req, res) => {
   try {
     const goals = await prisma.goal.findMany({
       where: { user_id: req.user.id, is_shared: true },
       orderBy: { created_at: 'desc' }
     });
-    res.json({ goals });
+    return successResponse(res, 200, 'Shared goals fetched successfully', { goals }, { goals });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch shared goals' });
+    console.error('Get shared goals error:', error);
+    return errorResponse(res, 500, 'Failed to fetch shared goals', 'FETCH_SHARED_GOALS_ERROR');
   }
 };
 
 // POST /api/goals
 export const createGoal = async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { thrust_area, title, description, uom_type, target_value, weightage, smart_score } = req.body;
 
     // Validate max goals
@@ -46,24 +40,24 @@ export const createGoal = async (req, res) => {
     });
 
     if (goalCount >= 8) {
-      return res.status(400).json({ error: 'Maximum limit of 8 goals reached' });
+      return errorResponse(res, 400, 'Maximum limit of 8 goals reached', 'MAX_GOALS_REACHED');
     }
 
-    // Validate weightage rules for single goal
-    if (weightage < 10) {
-      return res.status(400).json({ error: 'Individual goal weightage must be at least 10%' });
+    const parsedWeightage = parseInt(weightage, 10);
+    if (parsedWeightage < 10 || parsedWeightage > 100) {
+      return errorResponse(res, 400, 'Individual goal weightage must be between 10% and 100%', 'INVALID_WEIGHTAGE');
     }
 
     const goal = await prisma.goal.create({
       data: {
         user_id: req.user.id,
-        thrust_area,
+        thrust_area: thrust_area || 'General',
         title,
-        description,
-        uom_type,
+        description: description || null,
+        uom_type: uom_type || 'Numeric',
         target_value: parseFloat(target_value),
-        weightage: parseInt(weightage, 10),
-        smart_score: parseInt(smart_score, 10) || null,
+        weightage: parsedWeightage,
+        smart_score: smart_score ? parseInt(smart_score, 10) : null,
         status: 'draft',
       }
     });
@@ -77,10 +71,10 @@ export const createGoal = async (req, res) => {
       }
     });
 
-    res.status(201).json({ goal, message: 'Goal created successfully' });
+    return successResponse(res, 201, 'Goal created successfully', { goal }, { goal });
   } catch (error) {
     console.error('Create goal error:', error);
-    res.status(500).json({ error: 'Failed to create goal' });
+    return errorResponse(res, 500, 'Failed to create goal', 'CREATE_GOAL_ERROR');
   }
 };
 
@@ -88,57 +82,67 @@ export const createGoal = async (req, res) => {
 export const updateGoal = async (req, res) => {
   try {
     const { id } = req.params;
+    const goalId = parseInt(id, 10);
+    if (isNaN(goalId)) {
+      return errorResponse(res, 400, 'Invalid goal ID', 'INVALID_ID');
+    }
+
     const { thrust_area, title, description, uom_type, target_value, weightage, smart_score } = req.body;
 
-    const existingGoal = await prisma.goal.findFirst({
-      where: { id: parseInt(id, 10), user_id: req.user.id }
+    const existingGoal = await prisma.goal.findUnique({
+      where: { id: goalId }
     });
 
     if (!existingGoal) {
-      return res.status(404).json({ error: 'Goal not found' });
+      return errorResponse(res, 404, 'Goal not found', 'GOAL_NOT_FOUND');
+    }
+
+    if (existingGoal.user_id !== req.user.id) {
+      return errorResponse(res, 403, "Cannot modify another user's goal", 'FORBIDDEN');
     }
 
     if (existingGoal.status === 'pending' || existingGoal.status === 'approved' || existingGoal.status === 'locked') {
-      return res.status(400).json({ error: 'Cannot edit a goal in this status' });
+      return errorResponse(res, 400, 'Cannot edit a goal in this status', 'INVALID_GOAL_STATUS');
     }
 
-    if (weightage && weightage < 10) {
-      return res.status(400).json({ error: 'Individual goal weightage must be at least 10%' });
+    if (weightage !== undefined) {
+      const parsedWeightage = parseInt(weightage, 10);
+      if (parsedWeightage < 10 || parsedWeightage > 100) {
+        return errorResponse(res, 400, 'Individual goal weightage must be between 10% and 100%', 'INVALID_WEIGHTAGE');
+      }
     }
 
-    // Shared Goals Rule: Employees can only edit weightage
     let dataToUpdate = {
-      thrust_area,
-      title,
-      description,
-      uom_type,
-      target_value: target_value ? parseFloat(target_value) : undefined,
-      weightage: weightage ? parseInt(weightage, 10) : undefined,
-      smart_score: smart_score ? parseInt(smart_score, 10) : undefined,
+      thrust_area: thrust_area !== undefined ? thrust_area : existingGoal.thrust_area,
+      title: title !== undefined ? title : existingGoal.title,
+      description: description !== undefined ? description : existingGoal.description,
+      uom_type: uom_type !== undefined ? uom_type : existingGoal.uom_type,
+      target_value: target_value !== undefined ? parseFloat(target_value) : existingGoal.target_value,
+      weightage: weightage !== undefined ? parseInt(weightage, 10) : existingGoal.weightage,
+      smart_score: smart_score !== undefined ? parseInt(smart_score, 10) : existingGoal.smart_score,
     };
 
     if (existingGoal.is_shared) {
-      dataToUpdate = { weightage: weightage ? parseInt(weightage, 10) : undefined };
+      dataToUpdate = { weightage: weightage !== undefined ? parseInt(weightage, 10) : existingGoal.weightage };
     }
 
-    const goal = await prisma.goal.update({
-      where: { id: parseInt(id, 10) },
+    const updatedGoal = await prisma.goal.update({
+      where: { id: goalId },
       data: dataToUpdate
     });
 
-    // Audit Log
     await prisma.auditLog.create({
       data: {
         action: 'update_goal',
         user_id: req.user.id,
-        details: `Updated goal: ${goal.title}`,
+        details: `Updated goal: ${updatedGoal.title}`,
       }
     });
 
-    res.json({ goal, message: 'Goal updated successfully' });
+    return successResponse(res, 200, 'Goal updated successfully', { goal: updatedGoal }, { goal: updatedGoal });
   } catch (error) {
     console.error('Update goal error:', error);
-    res.status(500).json({ error: 'Failed to update goal' });
+    return errorResponse(res, 500, 'Failed to update goal', 'UPDATE_GOAL_ERROR');
   }
 };
 
@@ -146,24 +150,36 @@ export const updateGoal = async (req, res) => {
 export const deleteGoal = async (req, res) => {
   try {
     const { id } = req.params;
+    const goalId = parseInt(id, 10);
+    if (isNaN(goalId)) {
+      return errorResponse(res, 400, 'Invalid goal ID', 'INVALID_ID');
+    }
 
-    const existingGoal = await prisma.goal.findFirst({
-      where: { id: parseInt(id, 10), user_id: req.user.id }
+    const existingGoal = await prisma.goal.findUnique({
+      where: { id: goalId }
     });
 
     if (!existingGoal) {
-      return res.status(404).json({ error: 'Goal not found' });
+      return errorResponse(res, 404, 'Goal not found', 'GOAL_NOT_FOUND');
+    }
+
+    if (existingGoal.user_id !== req.user.id) {
+      return errorResponse(res, 403, "Cannot delete another user's goal", 'FORBIDDEN');
     }
 
     if (existingGoal.status !== 'draft' && existingGoal.status !== 'rejected') {
-      return res.status(400).json({ error: 'Only draft or rejected goals can be deleted' });
+      return errorResponse(res, 400, 'Only draft or rejected goals can be deleted', 'INVALID_GOAL_STATUS');
     }
 
-    await prisma.goal.delete({
-      where: { id: parseInt(id, 10) }
+    // Delete any achievements attached to this goal first to maintain FK integrity
+    await prisma.achievement.deleteMany({
+      where: { goal_id: goalId }
     });
 
-    // Audit Log
+    await prisma.goal.delete({
+      where: { id: goalId }
+    });
+
     await prisma.auditLog.create({
       data: {
         action: 'delete_goal',
@@ -172,14 +188,14 @@ export const deleteGoal = async (req, res) => {
       }
     });
 
-    res.json({ message: 'Goal deleted successfully' });
+    return successResponse(res, 200, 'Goal deleted successfully', {});
   } catch (error) {
     console.error('Delete goal error:', error);
-    res.status(500).json({ error: 'Failed to delete goal' });
+    return errorResponse(res, 500, 'Failed to delete goal', 'DELETE_GOAL_ERROR');
   }
 };
 
-// POST /api/goals/:id/submit OR POST /api/goals/submit-all
+// POST /api/goals/submit-all
 export const submitAllGoals = async (req, res) => {
   try {
     const goals = await prisma.goal.findMany({
@@ -187,18 +203,23 @@ export const submitAllGoals = async (req, res) => {
     });
 
     if (goals.length === 0) {
-      return res.status(400).json({ error: 'Minimum one goal is required' });
+      return errorResponse(res, 400, 'Minimum one goal is required', 'NO_GOALS_FOUND');
     }
 
     const totalWeightage = goals.reduce((acc, goal) => acc + goal.weightage, 0);
 
     if (totalWeightage !== 100) {
-      return res.status(400).json({ error: `Total weightage must be exactly 100%. Current is ${totalWeightage}%` });
+      return errorResponse(
+        res,
+        400,
+        `Total weightage must be exactly 100%. Current is ${totalWeightage}%`,
+        'INVALID_TOTAL_WEIGHTAGE'
+      );
     }
 
     const invalidGoals = goals.filter(g => g.weightage < 10);
     if (invalidGoals.length > 0) {
-      return res.status(400).json({ error: 'Some goals have weightage less than 10%' });
+      return errorResponse(res, 400, 'Some goals have weightage less than 10%', 'INVALID_GOAL_WEIGHTAGE');
     }
 
     // Update all draft/rejected goals to pending
@@ -221,9 +242,9 @@ export const submitAllGoals = async (req, res) => {
       }
     });
 
-    res.json({ message: 'Goals submitted for approval successfully' });
+    return successResponse(res, 200, 'Goals submitted for approval successfully', {});
   } catch (error) {
     console.error('Submit goals error:', error);
-    res.status(500).json({ error: 'Failed to submit goals' });
+    return errorResponse(res, 500, 'Failed to submit goals', 'SUBMIT_GOALS_ERROR');
   }
 };
