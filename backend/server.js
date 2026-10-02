@@ -13,6 +13,7 @@ import goalRoutes from './routes/goalRoutes.js';
 import managerRoutes from './routes/managerRoutes.js';
 import checkinRoutes from './routes/checkinRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import { initializeDatabase } from './config/initDb.js';
 
 const app = express();
 
@@ -107,9 +108,11 @@ app.use(errorHandler);
 
 // Listen only when not running inside test runner
 if (NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-    console.log(`API Documentation available at http://localhost:${PORT}/api/docs`);
+  initializeDatabase().finally(() => {
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+      console.log(`API Documentation available at http://localhost:${PORT}/api/docs`);
+    });
   });
 }
 
