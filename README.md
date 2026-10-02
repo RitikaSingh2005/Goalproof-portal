@@ -1,4 +1,5 @@
 # GoalProof Portal
+live working project (https://goalproof-portal.vercel.app)
 
 GoalProof Portal is a full-stack performance management and goal-tracking web application. It connects employees, managers, and administrators through structured goal setting, automated SMART evaluations, manager approval workflows, quarterly check-in cycles, and organizational analytics.
 
